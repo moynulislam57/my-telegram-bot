@@ -141,7 +141,8 @@ def process_signal(message):
 
 if __name__ == "__main__":
     print("V4.0 Ultra Engine Running...")
-    bot.infinity_polling()import telebot
+bot.infinity_polling()
+import telebot
 import requests
 import pandas as pd
 import pandas_ta as ta
