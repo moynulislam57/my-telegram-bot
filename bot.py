@@ -285,7 +285,6 @@ if __name__ == "__main__":
         "4. ATR Volatility Risk Model",
         parse_mode="Markdown", reply_markup=main_menu()
     )
-
 @bot.message_handler(func=lambda message: True)
 def process_signal(message):
     chat_id = message.chat.id
