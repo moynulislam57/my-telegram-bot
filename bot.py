@@ -1,35 +1,37 @@
 import telebot
 import pandas as pd
-import pandas_ta as ta
 import yfinance as yf
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-# ১. কনফিগারেশন (আপনার দেওয়া লাইভ টোকেন বসানো হয়েছে)
+# ১. কনফিগারেশন (আপনার লাইভ টোকেন)
 BOT_TOKEN = '8932222444:AAHKCUd7qEmPd3YQz_4jgiJl0ZzaRWk8LtM'  
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# লাইভ ডাটা আনার ফাংশน
-def get_binary_data(ticker):
-    # ৫ মিনিটের ক্যান্ডেল ডাটা নিয়ে অ্যানালাইসিস
-    data = yf.download(tickers=ticker, period="1d", interval="5m", progress=False)
-    df = pd.DataFrame(data)
-    df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
-    df = df.reset_index()
-    return df
-
-# ২. বাইনারি সিগন্যাল ইঞ্জিন
-def generate_binary_signal(pair_name="EURUSD=X"):
+# ডাটা আনা এবং কাস্টম গাণিতিক ইন্ডিকেটর হিসাব করা
+def get_binary_signals_pure(ticker):
     try:
-        df = get_binary_data(pair_name)
+        # ৫ মিনিটের লাইভ ডাটা ডাউনলোড করা
+        data = yf.download(tickers=ticker, period="1d", interval="5m", progress=False)
+        df = pd.DataFrame(data)
+        df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+        df = df.reset_index()
         
-        # ৩টি শক্তিশালী ইন্ডিকেটর ফিল্টার
-        df['RSI'] = ta.rsi(df['Close'], length=14)
-        df['EMA_20'] = ta.ema(df['Close'], length=20)
+        # ক) EMA 20 এর হিসাব
+        df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
         
-        # স্টোচাস্টিক অসিলেটর (Stochastic Oscillator)
-        stoch = ta.stoch(df['High'], df['Low'], df['Close'], k=14, d=3)
-        df['STOCHk'] = stoch['STOCHk_14_3_3']
+        # খ) RSI 14 এর হিসাব (পিউর ম্যাথ)
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
         
+        # গ) Stochastic Oscillator (%K) এর হিসাব
+        low_14 = df['Low'].rolling(window=14).min()
+        high_14 = df['High'].rolling(window=14).max()
+        df['STOCHk'] = 100 * ((df['Close'] - low_14) / (high_14 - low_14))
+        
+        # সর্বশেষ সম্পন্ন হওয়া ক্যান্ডেলের ডাটা নেওয়া
         current_price = float(df.iloc[-1]['Close'])
         last_closed = df.iloc[-2]
         
@@ -37,7 +39,6 @@ def generate_binary_signal(pair_name="EURUSD=X"):
         ema_val = float(last_closed['EMA_20'])
         stoch_k = float(last_closed['STOCHk'])
         
-        # সিগন্যাল ডিফল্ট স্ট্যাটাস
         signal_status = "HOLD"
         action = "⏳ SCANNING MARKET"
         expiry = "N/A"
@@ -57,26 +58,17 @@ def generate_binary_signal(pair_name="EURUSD=X"):
             expiry = "5 MINUTES (৫ মিনিট)"
             reason = "Market is in a Downtrend. Price bounced to resistance and Stochastic is overbought. Strong downward momentum expected."
 
-        # কারেন্সি নাম ফরম্যাট করার সঠিক কোড (টাইপো ফিক্সড)
-        clean_name = pair_name.replace("=X", "")
-        if len(clean_name) == 6:
-            display_name = f"{clean_name[:3]}/{clean_name[3:]}"
-        else:
-            display_name = clean_name
+        clean_name = ticker.replace("=X", "")
+        display_name = f"{clean_name[:3]}/{clean_name[3:]}" if len(clean_name) == 6 else clean_name
 
         return {
-            "status": True,
-            "signal_status": signal_status,
-            "pair": display_name,
-            "price": f"{current_price:.5f}",
-            "action": action,
-            "expiry": expiry,
-            "reason": reason
+            "status": True, "signal_status": signal_status, "pair": display_name,
+            "price": f"{current_price:.5f}", "action": action, "expiry": expiry, "reason": reason
         }
     except Exception as e:
         return {"status": False, "error": str(e)}
 
-# ৩. টেলিগ্রাম ইন্টারফেস ও বাটন
+# ২. টেলিগ্রাম ইন্টারফেস ও বাটন
 def main_menu():
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.row(KeyboardButton("📈 EUR/USD Signal"), KeyboardButton("📈 GBP/USD Signal"))
@@ -87,7 +79,7 @@ def main_menu():
 def welcome(message):
     bot.send_message(
         message.chat.id, 
-        "🤖 **Welcome to Binary Options Pro Signal Bot**\n\n"
+        "🤖 **Welcome to Binary Options Pro Signal Bot v5.5**\n\n"
         "এই বটটি সরাসরি মার্কেট ডাটা এনালাইসিস করে আপনাকে Quotex বা IQ Option এর জন্য সিগন্যাল দেবে।\n"
         "নিচের বাটনগুলো থেকে যেকোনো একটি কারেন্সি সিলেক্ট করুন:",
         parse_mode="Markdown", reply_markup=main_menu()
@@ -98,10 +90,8 @@ def process_signal(message):
     chat_id = message.chat.id
     
     pair_map = {
-        "EUR/USD": "EURUSD=X",
-        "GBP/USD": "GBPUSD=X",
-        "AUD/USD": "AUDUSD=X",
-        "USD/JPY": "JPY=X"
+        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X",
+        "AUD/USD": "AUDUSD=X", "USD/JPY": "JPY=X"
     }
     
     selected_pair = None
@@ -112,7 +102,7 @@ def process_signal(message):
             
     if selected_pair:
         bot.send_message(chat_id, f"🔍 {message.text.split()[-1]} মার্কেট স্ক্যান করা হচ্ছে... দয়া করে অপেক্ষা করুন।")
-        res = generate_binary_signal(selected_pair)
+        res = get_binary_signals_pure(selected_pair)
         
         if res["status"]:
             if res["signal_status"] == "TRADE":
@@ -141,5 +131,5 @@ def process_signal(message):
             bot.send_message(chat_id, f"❌ ডেটা আনতে সমস্যা হয়েছে: {res['error']}")
 
 if __name__ == "__main__":
-    print("Binary Signal Bot is Live and Running...")
+    print("Pure Math Binary Engine is Running Without Errors...")
     bot.infinity_polling()
